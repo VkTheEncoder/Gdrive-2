@@ -73,32 +73,35 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
     if GOOGLE_OAUTH_MODE == "web":
-        # existing logic (unchanged)
+        # Web OAuth (needs redirect URI/domain)
         from uuid import uuid4
         state = uuid4().hex
         save_state(state, uid)
         flow = build_flow(state)
-        auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline", include_granted_scopes="true")
+        auth_url, _ = flow.authorization_url(
+            prompt="consent", access_type="offline", include_granted_scopes="true"
+        )
         await update.message.reply_text("Tap to connect your Google Drive:\n" + auth_url)
         return
 
+    # Device Flow (no domain needed)
     dc = await device_code_request()
     status = await update.message.reply_text(
         "🔐 Connect Google Drive\n\n"
-        f"1) Open: https://www.google.com/device\n"
+        "1) Open: https://www.google.com/device\n"
         f"2) Enter code: {dc.user_code}\n\n"
         "I’ll wait while you approve…"
     )
-    
-    tok = await poll_device_token(dc.device_code, dc.interval)  # use server interval
-    creds_json = creds_from_token_response(tok)
-    email = email_from_id_token(tok.get("id_token"))
-    save_creds(update.effective_user.id, email, creds_json)
-    
-    await status.edit_text(f"✅ Connected as {email}. You can now send files or links.")
 
+    try:
+        tok = await poll_device_token(dc.device_code, dc.interval)  # uses server-suggested interval
+        creds_json = creds_from_token_response(tok)
+        email = email_from_id_token(tok.get("id_token"))
+        save_creds(uid, email, creds_json)
+        await status.edit_text(f"✅ Connected as {email}. You can now send files or links.")
     except Exception as e:
         await status.edit_text(f"❌ Login failed: {e}")
+
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     delete_creds(update.effective_user.id)
