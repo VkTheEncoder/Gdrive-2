@@ -9,6 +9,9 @@ from typing import Optional
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
+from .config import GOOGLE_OAUTH_MODE
+from .drive import build_flow, device_code_request, poll_device_token, creds_from_token_response, email_from_id_token
+
 
 from .config import DOWNLOAD_DIR, EDIT_THROTTLE_SECS
 from .db import init_db, save_state, load_creds, delete_creds, set_folder, get_folder
@@ -65,17 +68,37 @@ async def setfolder_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Folder set to `{arg}`", parse_mode=ParseMode.MARKDOWN)
 
 async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from uuid import uuid4
-    from .drive import build_flow
     uid = update.effective_user.id
-    state = uuid4().hex
-    save_state(state, uid)
-    flow = build_flow(state)
-    auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline", include_granted_scopes="true")
-    await update.message.reply_text(
-        "Tap to connect your Google Drive:\n" + auth_url,
-        disable_web_page_preview=False
+
+    if GOOGLE_OAUTH_MODE == "web":
+        # existing logic (unchanged)
+        from uuid import uuid4
+        state = uuid4().hex
+        save_state(state, uid)
+        flow = build_flow(state)
+        auth_url, _ = flow.authorization_url(prompt="consent", access_type="offline", include_granted_scopes="true")
+        await update.message.reply_text("Tap to connect your Google Drive:\n" + auth_url)
+        return
+
+    # DEVICE FLOW (no domain, no callback)
+    dc = await device_code_request()
+    msg = (
+        "🔐 *Connect Google Drive*\n\n"
+        f"1) Open: `{dc.verification_url}`\n"
+        f"2) Enter code: `{dc.user_code}`\n\n"
+        "I’ll wait while you approve…"
     )
+    status = await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+    try:
+        tok = await poll_device_token(dc.device_code)
+        creds_json = creds_from_token_response(tok)
+        email = email_from_id_token(tok.get("id_token"))
+
+        save_creds(uid, email, creds_json)
+        await status.edit_text(f"✅ Connected as *{email}*. You can now send files or links.", parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        await status.edit_text(f"❌ Login failed: {e}")
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     delete_creds(update.effective_user.id)
