@@ -14,6 +14,7 @@ import asyncio
 from .config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OAUTH_REDIRECT_URI, CHUNK_SIZE
 from .db import save_creds, load_creds, get_folder, set_folder
 from .utils import fmt_progress_html
+from .utils import card_progress
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file", "openid", "email", "profile"]
 
@@ -171,7 +172,8 @@ def upload_with_progress(
             last_bytes = uploaded
             last_t = now
             eta = (total - uploaded) / speed if speed > 0 else -1
-            status_updater(fmt_progress_html("⏫ Uploading", uploaded, total, speed, eta))
+            elapsed = now - start
+            status_updater(card_progress("Uploading File", uploaded, total, speed, elapsed, eta))
 
     file_id = resp["id"]
     link = resp.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
