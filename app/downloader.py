@@ -8,12 +8,11 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import unquote, urlparse
-
+from .utils import fmt_progress_html  # instead of fmt_progress
 from telegram import Bot
 from telegram.constants import FileDownloadOutOfRange
 
 from .config import DOWNLOAD_DIR, DL_CHUNK
-from .utils import fmt_progress
 
 _FILE_RE = re.compile(r'filename\*?=([^;]+)', re.I)
 
@@ -57,7 +56,7 @@ async def download_http(
                     if now - last >= 1.0:
                         speed = (done - last_done) / (now - last)
                         eta = (total - done) / (speed if speed > 0 else 1) if total else -1
-                        status_updater(fmt_progress("⏬ Downloading", done, total, speed, eta))
+                        status_updater(fmt_progress_html("⏬ Downloading", done, total, speed, eta))
                         last = now
                         last_done = done
             mime = r.headers.get("Content-Type")
@@ -89,7 +88,7 @@ async def download_telegram_file(
                     if now - last >= 1.0:
                         speed = (done - last_done) / (now - last)
                         eta = (total - done) / (speed if speed > 0 else 1) if total else -1
-                        status_updater(fmt_progress("⏬ Downloading", done, total, speed, eta))
+                        status_updater(fmt_progress_html("⏬ Downloading", done, total, speed, eta))
                         last = now
                         last_done = done
     mime, _ = mimetypes.guess_type(dest.name)
