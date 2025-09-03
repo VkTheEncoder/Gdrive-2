@@ -16,6 +16,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("gdrive_bot")
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    import logging, traceback
+    logging.exception("Unhandled error while processing update: %s", update)
+    if hasattr(update, "effective_message") and update.effective_message:
+        try:
+            await update.effective_message.reply_text("⚠️ Something went wrong, but I’m still here.")
+        except Exception:
+            pass
+
 def run_web():
     import uvicorn
     uvicorn.run("app.web:app", host=WEB_HOST, port=WEB_PORT, log_level="info", reload=False)
@@ -31,7 +40,7 @@ def main():
     th.start()
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("login", login))
@@ -44,8 +53,9 @@ def main():
             handle_document
         )
     )
-
+    # after you build the app:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_error_handler(on_error)
 
     log.info("Bot started. Web server on %s:%s", WEB_HOST, WEB_PORT)
     app.run_polling(close_loop=False)
@@ -54,16 +64,7 @@ if GOOGLE_OAUTH_MODE == "web":
     th = threading.Thread(target=run_web, daemon=True)
     th.start()
 
-async def on_error(update, context):
-    try:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="Something went wrong. I’m on it.")
-    except Exception:
-        pass
-    # and log:
-    import logging, traceback
-    logging.exception("Unhandled error: %s", traceback.format_exc())
 
-# after you build the app:
-app.add_error_handler(on_error)
+
 if __name__ == "__main__":
     main()
