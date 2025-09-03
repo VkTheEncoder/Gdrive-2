@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import unquote, urlparse
-from .utils import fmt_progress_html  # instead of fmt_progress
 from telegram import Bot
 from telegram.constants import FileDownloadOutOfRange
 from .utils import card_progress
