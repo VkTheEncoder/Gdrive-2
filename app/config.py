@@ -1,6 +1,8 @@
 from __future__ import annotations
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
 
 # Required
 GOOGLE_OAUTH_MODE = os.getenv("GOOGLE_OAUTH_MODE", "device").lower()  # "device" or "web"
