@@ -1,6 +1,7 @@
 from __future__ import annotations
 import math
 import time
+import html as _html
 
 def human_size(n: float) -> str:
     units = ["B","KB","MB","GB","TB"]
@@ -10,26 +11,30 @@ def human_size(n: float) -> str:
         i += 1
     return f"{n:.2f} {units[i]}"
 
-def make_bar(pct: float, width: int = 20) -> str:
+def _human_eta(seconds: float) -> str:
+    if seconds <= 0 or math.isinf(seconds) or math.isnan(seconds):
+        return "-"
+    s = int(seconds)
+    h, r = divmod(s, 3600)
+    m, s = divmod(r, 60)
+    if h:
+        return f"{h:d}:{m:02d}:{s:02d}"
+    return f"{m:d}:{s:02d}"
+
+def make_bar(pct: float, width: int = 24) -> str:
     pct = max(0.0, min(1.0, pct))
     fill = int(round(width * pct))
     return "█" * fill + "░" * (width - fill)
 
-class Throttle:
-    def __init__(self, interval: float):
-        self.interval = interval
-        self._last = 0.0
-    def ready(self) -> bool:
-        now = time.monotonic()
-        if (now - self._last) >= self.interval:
-            self._last = now
-            return True
-        return False
-
-def fmt_progress(stage: str, done: int, total: int, speed: float, eta_s: float) -> str:
+def fmt_progress_html(stage: str, done: int, total: int, speed: float, eta_s: float) -> str:
     pct = (done / total) if total else 0.0
     bar = make_bar(pct)
     pct_txt = f"{pct*100:5.1f}%"
     spd = human_size(speed) + "/s" if speed > 0 else "-"
-    eta = f"{int(eta_s)}s" if eta_s > 0 else "-"
-    return f"{stage} [{bar}] {pct_txt}\n{human_size(done)}/{human_size(total)}  •  {spd}  •  ETA {eta}"
+    eta = _human_eta(eta_s)
+    # Use <pre> for fixed width; avoid putting any user-provided strings inside without escaping
+    return (
+        f"{_html.escape(stage)}\n"
+        f"<pre>[{bar}] {pct_txt}\n"
+        f"{human_size(done)}/{human_size(total or 0)}  •  {spd}  •  ETA {eta}</pre>"
+    )
