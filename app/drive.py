@@ -13,7 +13,6 @@ from google_auth_oauthlib.flow import Flow
 import asyncio
 from .config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OAUTH_REDIRECT_URI, CHUNK_SIZE
 from .db import save_creds, load_creds, get_folder, set_folder
-from .utils import fmt_progress_html
 from .utils import card_progress
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file", "openid", "email", "profile"]
