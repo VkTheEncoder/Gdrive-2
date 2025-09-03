@@ -14,9 +14,11 @@ from .handlers import start, help_cmd, login, logout, me, setfolder_cmd, handle_
 
 logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-    level=logging.INFO,
+    level=logging.DEBUG,   # was INFO
 )
 log = logging.getLogger("gdrive_bot")
+
+
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     import traceback
