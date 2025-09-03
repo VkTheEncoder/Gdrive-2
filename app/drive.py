@@ -10,7 +10,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google_auth_oauthlib.flow import Flow
-
+import asyncio
 from .config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OAUTH_REDIRECT_URI, CHUNK_SIZE
 from .db import save_creds, load_creds, get_folder, set_folder
 from .utils import fmt_progress
@@ -46,7 +46,7 @@ async def device_code_request():
                 interval=int(j.get("interval", 5)),
             )
 
-async def poll_device_token(device_code: str):
+async def poll_device_token(device_code: str, interval: int = 5):
     data = {
         "client_id": GOOGLE_CLIENT_ID,
         "client_secret": GOOGLE_CLIENT_SECRET,
@@ -58,13 +58,16 @@ async def poll_device_token(device_code: str):
             async with s.post(TOKEN_URL, data=data) as r:
                 j = await r.json()
                 if "error" in j:
-                    if j["error"] in ("authorization_pending", "slow_down"):
-                        await asyncio.sleep(5 if j["error"] == "slow_down" else 2)
+                    if j["error"] == "authorization_pending":
+                        await asyncio.sleep(interval)
+                        continue
+                    if j["error"] == "slow_down":
+                        interval += 2
+                        await asyncio.sleep(interval)
                         continue
                     raise RuntimeError(j["error"])
-                # success
-                return j  # contains access_token, refresh_token, id_token, expires_in
-                
+                return j
+
 def _client_config():
     return {
         "web": {
