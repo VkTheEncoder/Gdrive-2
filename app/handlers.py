@@ -19,7 +19,7 @@ from .config import DOWNLOAD_DIR, EDIT_THROTTLE_SECS
 from .db import init_db, save_state, load_creds, delete_creds, set_folder, get_folder, save_creds
 from .drive import get_service_for_user, upload_with_progress
 from .downloader import download_http, download_telegram_file
-from .utils import Throttle, card_done
+from .utils import Throttle, card_done, card_progress
 
 log = logging.getLogger(__name__)
 
