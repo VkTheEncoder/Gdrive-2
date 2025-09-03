@@ -3,6 +3,7 @@ import math
 import time
 import html as _html
 
+# ---------- Humanizers ----------
 def human_size(n: float) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     i = 0
@@ -11,34 +12,52 @@ def human_size(n: float) -> str:
         i += 1
     return f"{n:.2f} {units[i]}"
 
-def _human_eta(seconds: float) -> str:
+def human_rate(bps: float) -> str:
+    return human_size(bps) + "/s" if bps > 0 else "-"
+
+def human_time(seconds: float) -> str:
     if seconds <= 0 or math.isinf(seconds) or math.isnan(seconds):
         return "-"
     s = int(seconds)
     h, r = divmod(s, 3600)
     m, s = divmod(r, 60)
     if h:
-        return f"{h:d}:{m:02d}:{s:02d}"
-    return f"{m:d}:{s:02d}"
+        return f"{h}h {m}m {s}s"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
 
-def make_bar(pct: float, width: int = 24) -> str:
-    pct = max(0.0, min(1.0, pct))
-    fill = int(round(width * pct))
-    return "█" * fill + "░" * (width - fill)
-
-def fmt_progress_html(stage: str, done: int, total: int, speed: float, eta_s: float) -> str:
-    pct = (done / total) if total else 0.0
-    bar = make_bar(pct)
-    pct_txt = f"{pct*100:5.1f}%"
-    spd = human_size(speed) + "/s" if speed > 0 else "-"
-    eta = _human_eta(eta_s)
-    # monospaced block so the bar aligns perfectly
+# ---------- Progress cards (HTML) ----------
+def card_progress(stage_title: str, done: int, total: int, speed: float, elapsed: float, eta: float) -> str:
+    """
+    Pretty, emoji-based, monospaced-friendly progress card. Use with parse_mode=HTML.
+    """
+    total = total or 0
+    pct = (done / total * 100.0) if total > 0 else 0.0
     return (
-        f"{_html.escape(stage)}\n"
-        f"<pre>[{bar}] {pct_txt}\n"
-        f"{human_size(done)}/{human_size(total or 0)}  •  {spd}  •  ETA {eta}</pre>"
+        f"📥 <b>{_html.escape(stage_title)}</b>\n\n"
+        f"📊 <b>Size:</b> {human_size(done)} of {human_size(total)}\n"
+        f"⚡ <b>Speed:</b> {human_rate(speed)}\n"
+        f"⏱️ <b>Time Elapsed:</b> {human_time(elapsed)}\n"
+        f"⏳ <b>ETA:</b> {human_time(eta)}\n"
+        f"📈 <b>Progress:</b> {pct:.1f}%"
     )
 
+def card_done(title: str, *, file_name: str, size: int, dl_time: float | None = None,
+              ul_time: float | None = None, link: str | None = None) -> str:
+    rows = [f"✅ <b>{_html.escape(title)}</b>\n"]
+    rows.append(f"📄 <b>File:</b> {_html.escape(file_name)}")
+    rows.append(f"📦 <b>Size:</b> {human_size(size)}")
+    if dl_time is not None:
+        rows.append(f"⬇️ <b>Download time:</b> {human_time(dl_time)}")
+    if ul_time is not None:
+        rows.append(f"⬆️ <b>Upload time:</b> {human_time(ul_time)}")
+    if link:
+        safe = _html.escape(link, quote=True)
+        rows.append(f"🔗 <b>Link:</b> <a href=\"{safe}\">Open in Drive</a>")
+    return "\n".join(rows)
+
+# ---------- Throttle ----------
 class Throttle:
     """Simple rate limiter for editing messages."""
     def __init__(self, interval: float):
