@@ -14,7 +14,7 @@ from .drive import build_flow, device_code_request, poll_device_token, creds_fro
 
 
 from .config import DOWNLOAD_DIR, EDIT_THROTTLE_SECS
-from .db import init_db, save_state, load_creds, delete_creds, set_folder, get_folder
+from .db import init_db, save_state, load_creds, delete_creds, set_folder, get_folder, save_creds
 from .drive import get_service_for_user, upload_with_progress
 from .downloader import download_http, download_telegram_file
 from .utils import Throttle
@@ -82,23 +82,21 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Tap to connect your Google Drive:\n" + auth_url)
         return
 
-    # DEVICE FLOW (no domain, no callback)
     dc = await device_code_request()
-    msg = (
-        "🔐 *Connect Google Drive*\n\n"
-        f"1) Open: `{dc.verification_url}`\n"
-        f"2) Enter code: `{dc.user_code}`\n\n"
+    status = await update.message.reply_text(
+        "🔐 Connect Google Drive\n\n"
+        f"1) Open: https://www.google.com/device\n"
+        f"2) Enter code: {dc.user_code}\n\n"
         "I’ll wait while you approve…"
     )
-    status = await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+    
+    tok = await poll_device_token(dc.device_code, dc.interval)  # use server interval
+    creds_json = creds_from_token_response(tok)
+    email = email_from_id_token(tok.get("id_token"))
+    save_creds(update.effective_user.id, email, creds_json)
+    
+    await status.edit_text(f"✅ Connected as {email}. You can now send files or links.")
 
-    try:
-        tok = await poll_device_token(dc.device_code)
-        creds_json = creds_from_token_response(tok)
-        email = email_from_id_token(tok.get("id_token"))
-
-        save_creds(uid, email, creds_json)
-        await status.edit_text(f"✅ Connected as *{email}*. You can now send files or links.", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         await status.edit_text(f"❌ Login failed: {e}")
 
