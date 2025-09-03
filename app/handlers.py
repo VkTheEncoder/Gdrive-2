@@ -47,15 +47,17 @@ async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     data = load_creds(uid)
     folder = get_folder(uid)
+
     if not data:
         await update.message.reply_text("Not connected. Use /login to connect your Google Drive.")
         return
+
     email, _ = data
     folder_txt = html.escape(folder) if folder else "Telegram Bot Uploads (auto)"
-    await update.message.reply_text(
-        f"Connected as <b>{html.escape(email)}</b><br>Folder: <code>{folder_txt}</code>",
-        parse_mode=ParseMode.HTML
-    )
+    text = f"Connected as <b>{html.escape(email)}</b>\nFolder: <code>{folder_txt}</code>"
+
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
 
 async def setfolder_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
