@@ -5,7 +5,7 @@ import mimetypes
 import re
 from pathlib import Path
 from typing import Optional
-
+import html
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
@@ -30,17 +30,16 @@ def extract_urls(text: Optional[str]) -> list[str]:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hi! I can upload your Telegram files or direct links to *your* Google Drive.\n\n"
-        "Commands:\n"
-        "• /login – Connect your Google Drive\n"
-        "• /logout – Disconnect Google Drive\n"
-        "• /me – Show account & folder\n"
-        "• /setfolder <folder_id> – Use a specific Drive folder\n\n"
-        "Send me a video/file *or* paste a direct link (HTTP) and I’ll do the rest.",
-        parse_mode=ParseMode.MARKDOWN,
+        "Hi! I can upload your Telegram files or direct links to <b>your</b> Google Drive.<br><br>"
+        "Commands:<br>"
+        "• <code>/login</code> – Connect your Google Drive<br>"
+        "• <code>/logout</code> – Disconnect Google Drive<br>"
+        "• <code>/me</code> – Show account &amp; folder<br>"
+        "• <code>/setfolder &lt;folder_id&gt;</code> – Use a specific Drive folder<br><br>"
+        "Send me a video/file <i>or</i> paste a direct link (HTTP) and I’ll do the rest.",
+        parse_mode=ParseMode.HTML,
         disable_web_page_preview=True
     )
-
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await start(update, context)
 
@@ -52,8 +51,11 @@ async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Not connected. Use /login to connect your Google Drive.")
         return
     email, _ = data
-    txt = f"Connected as **{email}**\nFolder: `{folder or 'Telegram Bot Uploads (auto)'}`"
-    await update.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
+    folder_txt = html.escape(folder) if folder else "Telegram Bot Uploads (auto)"
+    await update.message.reply_text(
+        f"Connected as <b>{html.escape(email)}</b><br>Folder: <code>{folder_txt}</code>",
+        parse_mode=ParseMode.HTML
+    )
 
 async def setfolder_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
