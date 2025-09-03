@@ -4,9 +4,9 @@ import time
 import html as _html
 
 def human_size(n: float) -> str:
-    units = ["B","KB","MB","GB","TB"]
+    units = ["B", "KB", "MB", "GB", "TB"]
     i = 0
-    while n >= 1024 and i < len(units)-1:
+    while n >= 1024 and i < len(units) - 1:
         n /= 1024.0
         i += 1
     return f"{n:.2f} {units[i]}"
@@ -32,9 +32,21 @@ def fmt_progress_html(stage: str, done: int, total: int, speed: float, eta_s: fl
     pct_txt = f"{pct*100:5.1f}%"
     spd = human_size(speed) + "/s" if speed > 0 else "-"
     eta = _human_eta(eta_s)
-    # Use <pre> for fixed width; avoid putting any user-provided strings inside without escaping
+    # monospaced block so the bar aligns perfectly
     return (
         f"{_html.escape(stage)}\n"
         f"<pre>[{bar}] {pct_txt}\n"
         f"{human_size(done)}/{human_size(total or 0)}  •  {spd}  •  ETA {eta}</pre>"
     )
+
+class Throttle:
+    """Simple rate limiter for editing messages."""
+    def __init__(self, interval: float):
+        self.interval = float(interval)
+        self._last = 0.0
+    def ready(self) -> bool:
+        now = time.monotonic()
+        if (now - self._last) >= self.interval:
+            self._last = now
+            return True
+        return False
