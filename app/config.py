@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 # Required
+GOOGLE_OAUTH_MODE = os.getenv("GOOGLE_OAUTH_MODE", "device").lower()  # "device" or "web"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
