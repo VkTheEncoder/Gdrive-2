@@ -121,7 +121,9 @@ async def _process_and_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     def updater(txt: str):
         if throttle.ready():
-            asyncio.create_task(status_msg.edit_text(txt))
+            asyncio.create_task(
+                status_msg.edit_text(txt, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+            )
 
     # 1) Download
     try:
