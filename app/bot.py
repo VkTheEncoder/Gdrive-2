@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import threading
+from telegram.error import BadRequest
 from .config import GOOGLE_OAUTH_MODE
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from .config import TELEGRAM_BOT_TOKEN, WEB_HOST, WEB_PORT
@@ -52,6 +53,17 @@ def main():
 if GOOGLE_OAUTH_MODE == "web":
     th = threading.Thread(target=run_web, daemon=True)
     th.start()
-    
+
+async def on_error(update, context):
+    try:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Something went wrong. I’m on it.")
+    except Exception:
+        pass
+    # and log:
+    import logging, traceback
+    logging.exception("Unhandled error: %s", traceback.format_exc())
+
+# after you build the app:
+app.add_error_handler(on_error)
 if __name__ == "__main__":
     main()
