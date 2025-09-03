@@ -3,6 +3,8 @@ import json
 import time
 from typing import Callable, Optional, Tuple
 import aiohttp
+import base64
+import json as _json
 from dataclasses import dataclass
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -91,6 +93,31 @@ def exchange_code_for_creds(state: str, code: str) -> Tuple[str, str]:
     # Fetch email
     email = creds.id_token.get("email") if creds.id_token else "unknown"
     return email, creds.to_json()
+
+def creds_from_token_response(j: dict) -> str:
+    # Normalize into the same structure google.oauth2.credentials expects
+    norm = {
+        "token": j["access_token"],
+        "refresh_token": j.get("refresh_token"),
+        "token_uri": TOKEN_URL,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "scopes": SCOPES,
+        "id_token": j.get("id_token"),
+    }
+    return json.dumps(norm)
+
+def email_from_id_token(id_token: str | None) -> str:
+    if not id_token: 
+        return "unknown"
+    # parse JWT body (no verify; we only need 'email' field)
+    try:
+        body = id_token.split(".")[1] + "=="
+        body_bytes = base64.urlsafe_b64decode(body)
+        payload = _json.loads(body_bytes)
+        return payload.get("email", "unknown")
+    except Exception:
+        return "unknown"
 
 def get_service_for_user(user_id: int):
     data = load_creds(user_id)
