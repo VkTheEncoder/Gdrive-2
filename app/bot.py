@@ -1,7 +1,7 @@
 from __future__ import annotations
 import logging
 import threading
-
+from .config import GOOGLE_OAUTH_MODE
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from .config import TELEGRAM_BOT_TOKEN, WEB_HOST, WEB_PORT
 from .db import init_db
@@ -41,6 +41,10 @@ def main():
 
     log.info("Bot started. Web server on %s:%s", WEB_HOST, WEB_PORT)
     app.run_polling(close_loop=False)
-
+    
+if GOOGLE_OAUTH_MODE == "web":
+    th = threading.Thread(target=run_web, daemon=True)
+    th.start()
+    
 if __name__ == "__main__":
     main()
