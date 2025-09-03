@@ -6,6 +6,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from .config import TELEGRAM_BOT_TOKEN, WEB_HOST, WEB_PORT
 from .db import init_db
 from .handlers import start, help_cmd, login, logout, me, setfolder_cmd, handle_document, handle_text
+from dotenv import load_dotenv
+load_dotenv()
 
 logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
