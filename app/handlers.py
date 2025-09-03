@@ -3,6 +3,7 @@ import asyncio
 import logging
 import mimetypes
 import re
+import time
 from pathlib import Path
 from typing import Optional
 import html
@@ -12,12 +13,13 @@ from telegram.ext import ContextTypes
 from .config import GOOGLE_OAUTH_MODE
 from .drive import build_flow, device_code_request, poll_device_token, creds_from_token_response, email_from_id_token
 
+from telegram.constants import ParseMode
 
 from .config import DOWNLOAD_DIR, EDIT_THROTTLE_SECS
 from .db import init_db, save_state, load_creds, delete_creds, set_folder, get_folder, save_creds
 from .drive import get_service_for_user, upload_with_progress
 from .downloader import download_http, download_telegram_file
-from .utils import Throttle
+from .utils import Throttle, card_done
 
 log = logging.getLogger(__name__)
 
@@ -30,13 +32,13 @@ def extract_urls(text: Optional[str]) -> list[str]:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "Hi! I can upload your Telegram files or direct links to your Google Drive.\n\n"
+        "Hi! I can upload your Telegram files or direct HTTP links to your Google Drive.\n\n"
         "Commands:\n"
         "• /login – Connect your Google Drive\n"
         "• /logout – Disconnect Google Drive\n"
-        "• /me – Show account & folder\n"
-        "• /setfolder <folder_id> – Use a specific Drive folder\n\n"
-        "Send me a video/file or paste a direct HTTP link and I’ll do the rest."
+        "• /me – Show connected account & folder\n"
+        "• /setfolder <folder_id> – Set a specific Drive folder\n\n"
+        "Send me a video/file or paste a direct link and I’ll handle the rest."
     )
     await update.message.reply_text(text, disable_web_page_preview=True)
     
@@ -121,37 +123,53 @@ async def _process_and_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     def updater(txt: str):
         if throttle.ready():
-            asyncio.create_task(
-                status_msg.edit_text(txt, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            )
+            asyncio.create_task(status_msg.edit_text(txt, parse_mode=ParseMode.HTML, disable_web_page_preview=True))
 
     # 1) Download
     try:
+        dl_start = time.time()
         if from_telegram and file_id:
-            dest, mime = await download_telegram_file(context.bot, file_id, DOWNLOAD_DIR, updater)
+            dest, mime, total = await download_telegram_file(context.bot, file_id, DOWNLOAD_DIR, updater)
         else:
-            dest, mime = await download_http(src, DOWNLOAD_DIR, updater)
+            dest, mime, total = await download_http(src, DOWNLOAD_DIR, updater)
+        dl_elapsed = time.time() - dl_start
+
+        # Show a short "Download complete" card before upload
+        size_bytes = dest.stat().st_size
+        await status_msg.edit_text(
+            card_done("Download complete", file_name=dest.name, size=size_bytes, dl_time=dl_elapsed),
+            parse_mode=ParseMode.HTML, disable_web_page_preview=True
+        )
     except Exception as e:
         log.exception("Download failed")
-        await status_msg.edit_text(f"❌ Download failed: {e}")
+        await status_msg.edit_text(f"❌ Download failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
         return
 
     # 2) Upload
     try:
+        ul_start = time.time()
         service, _ = get_service_for_user(uid)
         if not service:
             await status_msg.edit_text("Please /login first to connect your Google Drive.")
             return
-        # guess mime if needed
         if not mime:
             mime, _ = mimetypes.guess_type(dest.name)
+
+        # immediately switch the message to an initial uploading card (0%); the loop inside upload will keep updating
+        updater(card_progress("Uploading File", 0, size_bytes, 0.0, 0.0, -1))
+
         link = upload_with_progress(service, uid, str(dest), dest.name, mime, updater)
+        ul_elapsed = time.time() - ul_start
+
+        # 3) Final summary
+        await status_msg.edit_text(
+            card_done("Upload complete", file_name=dest.name, size=size_bytes, dl_time=dl_elapsed, ul_time=ul_elapsed, link=link),
+            parse_mode=ParseMode.HTML, disable_web_page_preview=False
+        )
     except Exception as e:
         log.exception("Upload failed")
-        await status_msg.edit_text(f"❌ Upload failed: {e}")
+        await status_msg.edit_text(f"❌ Upload failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
         return
-
-    await status_msg.edit_text(f"✅ Uploaded to Google Drive:\n{link}")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document or update.message.video or update.message.animation
