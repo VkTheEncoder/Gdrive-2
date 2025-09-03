@@ -2,7 +2,8 @@ from __future__ import annotations
 import json
 import time
 from typing import Callable, Optional, Tuple
-
+import aiohttp
+from dataclasses import dataclass
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -14,6 +15,54 @@ from .utils import fmt_progress
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file", "openid", "email", "profile"]
 
+DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+SCOPES = ["https://www.googleapis.com/auth/drive.file", "openid", "email", "profile"]
+
+@dataclass
+class DeviceCode:
+    device_code: str
+    user_code: str
+    verification_url: str
+    expires_in: int
+    interval: int
+
+async def device_code_request():
+    payload = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "scope": " ".join(SCOPES)
+    }
+    async with aiohttp.ClientSession() as s:
+        async with s.post(DEVICE_CODE_URL, data=payload) as r:
+            r.raise_for_status()
+            j = await r.json()
+            return DeviceCode(
+                device_code=j["device_code"],
+                user_code=j["user_code"],
+                verification_url=j.get("verification_url", "https://www.google.com/device"),
+                expires_in=int(j["expires_in"]),
+                interval=int(j.get("interval", 5)),
+            )
+
+async def poll_device_token(device_code: str):
+    data = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "device_code": device_code,
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+    }
+    async with aiohttp.ClientSession() as s:
+        while True:
+            async with s.post(TOKEN_URL, data=data) as r:
+                j = await r.json()
+                if "error" in j:
+                    if j["error"] in ("authorization_pending", "slow_down"):
+                        await asyncio.sleep(5 if j["error"] == "slow_down" else 2)
+                        continue
+                    raise RuntimeError(j["error"])
+                # success
+                return j  # contains access_token, refresh_token, id_token, expires_in
+                
 def _client_config():
     return {
         "web": {
