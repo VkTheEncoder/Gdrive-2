@@ -13,7 +13,7 @@ from google_auth_oauthlib.flow import Flow
 import asyncio
 from .config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, OAUTH_REDIRECT_URI, CHUNK_SIZE
 from .db import save_creds, load_creds, get_folder, set_folder
-from .utils import fmt_progress
+from .utils import fmt_progress_html
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file", "openid", "email", "profile"]
 
@@ -155,19 +155,23 @@ def upload_with_progress(
 
     start = time.time()
     last_bytes = 0
+    last_t = start
     uploaded = 0
     total = media.size() or 0
-
+    
     resp = None
     while resp is None:
         status, resp = req.next_chunk()
         if status:
             uploaded = int(status.resumable_progress)
-            elapsed = time.time() - start
-            speed = (uploaded - last_bytes) / (elapsed if elapsed > 0 else 1)
+            now = time.time()
+            dt = max(0.001, now - last_t)
+            delta = uploaded - last_bytes
+            speed = max(0.0, delta / dt)
             last_bytes = uploaded
-            eta = (total - uploaded) / (speed if speed > 0 else 1)
-            status_updater(fmt_progress("⏫ Uploading", uploaded, total, speed, eta))
+            last_t = now
+            eta = (total - uploaded) / speed if speed > 0 else -1
+            status_updater(fmt_progress_html("⏫ Uploading", uploaded, total, speed, eta))
 
     file_id = resp["id"]
     link = resp.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
