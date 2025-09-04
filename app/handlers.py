@@ -35,8 +35,6 @@ from .drive import (
 )
 from .downloader import download_http, download_telegram_file
 from .utils import Throttle, card_done, card_progress
-from collections import defaultdict, deque
-import secrets
 
 log = logging.getLogger(__name__)
 
@@ -47,8 +45,6 @@ _URL_RE = re.compile(r"(https?://\S+)", re.I)
 # ---------- queue data structures ----------
 @dataclass
 class Job:
-    id: str
-    user_id: int
     update: Update
     context: ContextTypes.DEFAULT_TYPE
     src: str
@@ -56,73 +52,10 @@ class Job:
     file_id: Optional[str]
     ticket_msg: Message  # the message we keep editing
 
-# Per-user state: each user has its own queue and worker task
-class UserState:
-    def __init__(self):
-        self.queue: deque[Job] = deque()
-        self.worker_task: Optional[asyncio.Task] = None
-        self.active: Optional[Job] = None
+_job_queue: asyncio.Queue[Job] = asyncio.Queue()
+_worker_task: Optional[asyncio.Task] = None
+_worker_busy: bool = False
 
-# user_id -> UserState
-_user_states: dict[int, UserState] = defaultdict(UserState)
-
-# quick lookup: job_id -> Job (so /cancel can target by ID)
-_JOB_INDEX: dict[str, Job] = {}
-
-# jobs the user canceled before they started; worker will skip them
-_CANCELED_IDS: set[str] = set()
-
-def _new_job_id() -> str:
-    # 6-char base36-ish token, easy to type: e.g., "k9d7af"
-    return secrets.token_hex(3)
-
-def _state(uid: int) -> UserState:
-    return _user_states[uid]
-
-def _ensure_worker(uid: int, app: Application):
-    st = _state(uid)
-    if st.worker_task and not st.worker_task.done():
-        return
-    st.worker_task = app.create_task(_user_worker(uid, app), name=f"worker:{uid}")
-
-async def _user_worker(uid: int, app: Application):
-    st = _state(uid)
-    while True:
-        # Wait for next job
-        while not st.queue:
-            # If nobody is waiting, sleep briefly; exit if idle a bit (optional)
-            await asyncio.sleep(0.1)
-
-        job = st.queue.popleft()
-
-        if job.id in _CANCELED_IDS:
-            # user canceled before it started
-            try:
-                await safe_edit(job.ticket_msg, "❌ Canceled before start.")
-            except Exception:
-                pass
-            _JOB_INDEX.pop(job.id, None)
-            _CANCELED_IDS.discard(job.id)
-            continue
-
-        st.active = job
-        try:
-            await _process_job(job)  # <— reuse your existing logic (see section D)
-        except asyncio.CancelledError:
-            # Active job canceled
-            try:
-                await safe_edit(job.ticket_msg, "❌ Canceled.")
-            except Exception:
-                pass
-            raise
-        except Exception as e:
-            try:
-                await safe_edit(job.ticket_msg, f"⚠️ Failed: <code>{html.escape(str(e))}</code>")
-            except Exception:
-                pass
-        finally:
-            _JOB_INDEX.pop(job.id, None)
-            st.active = None
 
 # ---------- helpers ----------
 async def safe_edit(
@@ -339,114 +272,47 @@ async def _queue_worker(app: Application) -> None:
             _worker_busy = False
             _job_queue.task_done()
 
-async def _process_job(job: Job):
-    update = job.update
-    context = job.context
-    src = job.src
-    from_telegram = job.from_telegram
-    file_id = job.file_id
-    status_msg = job.ticket_msg
-
-    # keep the rest of your original flow:
-    # - download (telegram/http) with updater()
-    # - upload to drive with updater()
-    # - final safe_edit() with result card
 
 async def queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    st = _state(uid)
+    pending = _job_queue.qsize()
+    running = 1 if _worker_busy else 0
+    total = pending + running
 
-    rows = []
-    if st.active:
-        rows.append(f"▶️ #{st.active.id}  (running)")
-    for i, j in enumerate(list(st.queue), start=1):
-        rows.append(f"⏳ #{j.id}  (pos {i})")
-
-    if not rows:
-        await update.message.reply_text("Your queue is empty.")
+    if total == 0:
+        await update.message.reply_text("✅ Queue is empty.")
         return
 
-    await update.message.reply_text("Your jobs:\n" + "\n".join(rows))
+    msg = [
+        "🕗 <b>Queue status</b>",
+        f"• Running now: <b>{running}</b>",
+        f"• Waiting: <b>{pending}</b>",
+        f"• Total: <b>{total}</b>",
+        "",
+        "Tip: when you add a job I reply with your position. I’ll reuse that same message for progress and results.",
+    ]
+    await update.message.reply_text("\n".join(msg), parse_mode=ParseMode.HTML)
 
-
-async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    st = _state(uid)
-
-    arg = (context.args[0].strip() if context.args else "").lower()
-    if not arg:
-        await update.message.reply_text("Usage:\n/cancel <job_id> — cancel queued job\n/cancel current — cancel the running job")
-        return
-
-    # Cancel current job
-    if arg in ("current", "now", "running"):
-        if st.worker_task and st.active:
-            st.worker_task.cancel()
-            await update.message.reply_text(f"Requested cancel of current job #{st.active.id}.")
-        else:
-            await update.message.reply_text("No active job.")
-        return
-
-    # Cancel by job ID (queued)
-    jid = arg
-    job = _JOB_INDEX.get(jid)
-    if not job or job.user_id != uid:
-        await update.message.reply_text("Job not found (check /queue for IDs).")
-        return
-
-    if st.active and job.id == (st.active.id if st.active else None):
-        # It is the active job — cancel worker task
-        if st.worker_task:
-            st.worker_task.cancel()
-            await update.message.reply_text(f"Requested cancel of current job #{jid}.")
-        else:
-            await update.message.reply_text("No active job.")
-        return
-
-    # Mark queued job as canceled; worker will skip it when it gets there
-    _CANCELED_IDS.add(jid)
-    try:
-        await safe_edit(job.ticket_msg, "❌ Canceled (before start).")
-    except Exception:
-        pass
-    await update.message.reply_text(f"Canceled queued job #{jid}.")
 
 async def _enqueue_job(update: Update, context: ContextTypes.DEFAULT_TYPE, *, src: str, from_telegram: bool, file_id: Optional[str]):
     uid = update.effective_user.id
 
-    # Make a ticket message
-    st = _state(uid)
-    position = len(st.queue) + (1 if st.active else 0) + 1
+    # ⛔ if not connected, do not enqueue and do not create a ticket message
+    if not load_creds(uid):
+        await update.message.reply_text("Please /login first to connect your Google Drive.")
+        return
+
+    position = _job_queue.qsize() + (1 if _worker_busy else 0) + 1
     if position > 1:
         ticket = await update.message.reply_text(
-            f"🕗 Queued • Position #{position}\nI’ll update this message when your turn starts.",
+            f"🕗 Queued • Position #{position}\n"
+            f"I’ll update this message when your turn starts.",
             disable_web_page_preview=True,
         )
     else:
         ticket = await update.message.reply_text("Preparing…")
 
-    # Create job with a short ID
-    jid = _new_job_id()
-    job = Job(
-        id=jid,
-        user_id=uid,
-        update=update,
-        context=context,
-        src=src,
-        from_telegram=from_telegram,
-        file_id=file_id,
-        ticket_msg=ticket,
-    )
-    st.queue.append(job)
-    _JOB_INDEX[jid] = job
-
-    # Show the ID so user can /cancel <id>
-    try:
-        await safe_edit(ticket, f"🧾 Ticket #{jid}\nQueued • Position {position}")
-    except Exception:
-        pass
-
-    _ensure_worker(uid, context.application)
+    await _job_queue.put(Job(update=update, context=context, src=src, from_telegram=from_telegram, file_id=file_id, ticket_msg=ticket))
+    _start_worker(context.application)
 
 # ---------- core flow ----------
 async def _process_and_upload(
