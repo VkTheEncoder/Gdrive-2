@@ -64,16 +64,31 @@ def extract_urls(text: Optional[str]) -> list[str]:
 
 # ---------- user-facing commands ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "Hi! I can upload your Telegram files or direct HTTP links to your Google Drive.\n\n"
-        "Commands:\n"
-        "• /login – Connect your Google Drive\n"
-        "• /logout – Disconnect Google Drive\n"
-        "• /me – Show connected account & folder\n"
-        "• /setfolder <folder_id> – Set a specific Drive folder\n\n"
-        "Send me a video/file or paste a direct link and I’ll handle the rest."
+    msg = (
+        "<b>📁 GDrive Uploader Bot</b>\n"
+        "Fast, reliable uploads to your Google Drive with live progress cards.\n\n"
+        "<b>What I can do</b>\n"
+        "• Download from direct links (auto-follows most redirects)  \n"
+        "• Upload to your Drive with resumable progress  \n"
+        "• Queue multiple jobs (you’ll see your position)  \n"
+        "• Optional target folder for uploads\n\n"
+        "<b>Getting started</b>\n"
+        "1) <code>/login</code> – connect your Google account  \n"
+        "2) Send a file (≤ 20\u202fMB via Telegram) or paste a direct HTTP link\n\n"
+        "<b>Commands</b>\n"
+        "• <code>/login</code> – connect Google Drive  \n"
+        "• <code>/logout</code> – disconnect & delete tokens  \n"
+        "• <code>/me</code> – show connected account & folder  \n"
+        "• <code>/setfolder &lt;folder_id&gt;</code> – set target Drive folder  \n"
+        "• <code>/queue</code> – see pending jobs  \n"
+        "• <code>/help</code> – show this help\n\n"
+        "<b>Notes</b>\n"
+        "• Telegram’s Bot API can only download files up to ~20\u202fMB. For larger files, send a direct link.  \n"
+        "• I’ll send clear status cards for Downloading → Uploading → Upload complete with the file link.\n\n"
+        "<b>Privacy</b>\n"
+        "OAuth tokens are stored only to upload to <i>your</i> Drive. Use <code>/logout</code> anytime to remove them."
     )
-    await update.message.reply_text(text, disable_web_page_preview=True)
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
