@@ -11,14 +11,14 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from .config import TELEGRAM_BOT_TOKEN, WEB_HOST, WEB_PORT, GOOGLE_OAUTH_MODE  # single import line
 from .db import init_db
 from .handlers import start, help_cmd, login, logout, me, setfolder_cmd, handle_document, handle_text, queue_cmd
-
+from .config import EDIT_THROTTLE_SECS
 
 logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
     level=logging.INFO,   # was INFO
 )
 log = logging.getLogger("gdrive_bot")
-
+log.info("EDIT_THROTTLE_SECS = %s", EDIT_THROTTLE_SECS)
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
