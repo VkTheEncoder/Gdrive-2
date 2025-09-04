@@ -186,7 +186,7 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = await update.message.reply_text(
         "🔐 Connect Google Drive\n\n"
         "1) Open: https://www.google.com/device\n"
-        f"2) Enter code: {dc.user_code}\n\n"
+        f"2) Enter code: `{dc.user_code}`\n\n"
         "I’ll wait while you approve…"
     )
 
