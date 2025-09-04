@@ -320,6 +320,7 @@ async def _process_and_upload(
             asyncio.create_task(
                 safe_edit(status_msg, txt, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
             )
+
     # 1) Download
     try:
         dl_start = time.time()
@@ -332,21 +333,16 @@ async def _process_and_upload(
         dl_elapsed = time.time() - dl_start
 
         size_bytes = dest.stat().st_size
+        # ✅ FIX: pass (status_msg, text)
         await safe_edit(
-            card_done(
-                "Download complete",
-                file_name=dest.name,
-                size=size_bytes,
-                dl_time=dl_elapsed,
-            ),
-            parse_mode=ParseMode.HTML,
+            status_msg,
+            card_done("Download complete", file_name=dest.name, size=size_bytes, dl_time=dl_elapsed),
             disable_web_page_preview=True,
         )
     except Exception as e:
         log.exception("Download failed")
-        await safe_edit(
-            f"❌ Download failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML
-        )
+        # ✅ FIX: pass (status_msg, text)
+        await safe_edit(status_msg, f"❌ Download failed: {html.escape(str(e))}")
         return
 
     # 2) Upload
@@ -354,7 +350,7 @@ async def _process_and_upload(
         ul_start = time.time()
         service, _ = get_service_for_user(uid)
         if not service:
-            await status_msg.edit_text("Please /login first to connect your Google Drive.")
+            await safe_edit(status_msg, "Please /login first to connect your Google Drive.")
             return
         if not mime:
             mime, _ = mimetypes.guess_type(dest.name)
@@ -362,14 +358,14 @@ async def _process_and_upload(
         # initial upload card
         updater(card_progress("Uploading File", 0, size_bytes, 0.0, 0.0, -1))
 
-        link, info = upload_with_progress(
-            service, uid, str(dest), dest.name, mime, updater
-        )
+        link, info = upload_with_progress(service, uid, str(dest), dest.name, mime, updater)
         ul_elapsed = time.time() - ul_start
 
         size_final = int(info.get("size") or size_bytes)
 
-        await status_msg.edit_text(
+        # ✅ FIX: use safe_edit with retries, and pass message first
+        await safe_edit(
+            status_msg,
             card_done(
                 "Upload complete",
                 file_name=dest.name,
@@ -378,15 +374,14 @@ async def _process_and_upload(
                 ul_time=ul_elapsed,
                 link=link,
             ),
-            parse_mode=ParseMode.HTML,
             disable_web_page_preview=False,
         )
     except Exception as e:
         log.exception("Upload failed")
-        await status_msg.edit_text(
-            f"❌ Upload failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML
-        )
+        # ✅ FIX: use safe_edit
+        await safe_edit(status_msg, f"❌ Upload failed: {html.escape(str(e))}")
         return
+
 
 
 # ---------- update handlers ----------
