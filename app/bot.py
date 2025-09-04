@@ -10,7 +10,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 from .config import TELEGRAM_BOT_TOKEN, WEB_HOST, WEB_PORT, GOOGLE_OAUTH_MODE  # single import line
 from .db import init_db
-from .handlers import start, help_cmd, login, logout, me, setfolder_cmd, handle_document, handle_text
+from .handlers import start, help_cmd, login, logout, me, setfolder_cmd, handle_document, handle_text, queue_cmd
+
 
 logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
