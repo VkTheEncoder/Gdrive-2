@@ -140,7 +140,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Telegram’s Bot API can only download files up to ~20\u202fMB. For larger files, send a direct link.  \n"
         "• I’ll send clear status cards for Downloading → Uploading → Upload complete with the file link.\n\n"
         "<b>Privacy</b>\n"
-        "OAuth tokens are stored only to upload to <i>your</i> Drive. Use <code>/logout</code> anytime to remove them\n\n."
+        "OAuth tokens are stored only to upload to <i>your</i> Drive. Use <code>/logout</code> anytime to remove them.\n\n"
         "<b>📩 Contact @THe_vK_3 if any problem or Query 😇</b>"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
