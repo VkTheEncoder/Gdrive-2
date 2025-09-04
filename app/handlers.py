@@ -130,7 +130,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
-
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await start(update, context)
 
@@ -246,6 +245,25 @@ async def _queue_worker(app: Application) -> None:
             _worker_busy = False
             _job_queue.task_done()
 
+async def queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Global queue length + whether something is currently running
+    pending = _job_queue.qsize()
+    running = 1 if _worker_busy else 0
+    total = pending + running
+
+    if total == 0:
+        await update.message.reply_text("✅ Queue is empty.")
+        return
+
+    msg = [
+        "🕗 <b>Queue status</b>",
+        f"• Running now: <b>{running}</b>",
+        f"• Waiting: <b>{pending}</b>",
+        f"• Total: <b>{total}</b>",
+        "",
+        "Tip: when you add a job I reply with your position. I’ll reuse that same message for progress and results.",
+    ]
+    await update.message.reply_text("\n".join(msg), parse_mode=ParseMode.HTML)
 
 async def _enqueue_job(
     update: Update,
