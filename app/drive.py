@@ -172,9 +172,18 @@ def upload_with_progress(service, user_id: int, file_path: str, file_name: str, 
     uploaded = 0
     total = media.size() or 0
 
-    resp = None
-    while resp is None:
-        status, resp = req.next_chunk()
+    try:
+        while True:
+            status, resp = request.next_chunk()
+            # ... your progress updater ...
+            if resp is not None:
+                break
+    except asyncio.CancelledError:
+        try:
+            request.cancel()  # best-effort; safe if not present in your wrapper
+        except Exception:
+            pass
+        raise
         if status:
             uploaded = int(status.resumable_progress)
             now = time.time()
