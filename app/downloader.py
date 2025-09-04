@@ -223,9 +223,23 @@ async def download_http(
                         if not mime_hint:
                             mime_hint = r.headers.get("Content-Type")
 
-                        async for chunk in r.content.iter_chunked(DL_CHUNK):
-                            f.write(chunk)
-                            done += len(chunk)
+                        # around your loop in download_http and download_telegram_file
+                        try:
+                            with open(dest, "wb") as f:
+                                async for chunk in r.content.iter_chunked(DL_CHUNK):
+                                    f.write(chunk)
+                                    # ... your progress updates ...
+                        except asyncio.CancelledError:
+                            try:
+                                f.close()
+                            except Exception:
+                                pass
+                            try:
+                                dest.unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                            raise
+
 
                             now = time.time()
                             if now - last_t >= 1.0:
