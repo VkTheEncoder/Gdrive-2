@@ -283,10 +283,21 @@ async def download_telegram_file(bot: Bot, file_id: str, dest_dir: Path, status_
             start = last = time.time()
             done = 0
             last_done = 0
-            with open(dest, "wb") as f:
-                async for chunk in r.content.iter_chunked(DL_CHUNK):
-                    f.write(chunk)
-                    done += len(chunk)
+            try:
+                with open(dest, "wb") as f:
+                    async for chunk in r.content.iter_chunked(DL_CHUNK):
+                        f.write(chunk)
+                        # ... your progress updates ...
+            except asyncio.CancelledError:
+                try:
+                    f.close()
+                except Exception:
+                    pass
+                try:
+                    dest.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise
                     now = time.time()
                     if now - last >= 1.0:
                         dt = max(0.001, now - last)
