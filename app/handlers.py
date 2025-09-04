@@ -245,28 +245,27 @@ def _start_worker(app: Application) -> None:
 
 
 async def _queue_worker(app: Application) -> None:
-    """Background consumer that runs one job at a time."""
     global _worker_busy
     while True:
         job = await _job_queue.get()
         _worker_busy = True
         try:
-            try:
-                await safe_edit(job.ticket_msg, "⏳ Starting…")
-            except Exception:
-                pass
+            uid = job.update.effective_user.id
+
+            # If the user logged out while queued, don't show "Starting…"
+            if not load_creds(uid):
+                await safe_edit(job.ticket_msg, "Please /login first to connect your Google Drive.")
+                continue
+
+            await safe_edit(job.ticket_msg, "⏳ Starting…")
 
             await _process_and_upload(
-                job.update,
-                job.context,
-                job.src,
-                job.from_telegram,
-                job.file_id,
-                existing_status_msg=job.ticket_msg,
+                job.update, job.context, job.src, job.from_telegram, job.file_id,
+                existing_status_msg=job.ticket_msg
             )
         except Exception as e:
             try:
-                await safe_edit(job.ticket_msg, f"❌ Failed: {html.escape(str(e))}")
+                await job.ticket_msg.edit_text(f"❌ Failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
             except Exception:
                 pass
         finally:
@@ -294,15 +293,14 @@ async def queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(msg), parse_mode=ParseMode.HTML)
 
 
-async def _enqueue_job(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    *,
-    src: str,
-    from_telegram: bool,
-    file_id: Optional[str],
-):
-    """Show queued position, enqueue, and start worker."""
+async def _enqueue_job(update: Update, context: ContextTypes.DEFAULT_TYPE, *, src: str, from_telegram: bool, file_id: Optional[str]):
+    uid = update.effective_user.id
+
+    # ⛔ if not connected, do not enqueue and do not create a ticket message
+    if not load_creds(uid):
+        await update.message.reply_text("Please /login first to connect your Google Drive.")
+        return
+
     position = _job_queue.qsize() + (1 if _worker_busy else 0) + 1
     if position > 1:
         ticket = await update.message.reply_text(
@@ -313,18 +311,8 @@ async def _enqueue_job(
     else:
         ticket = await update.message.reply_text("Preparing…")
 
-    await _job_queue.put(
-        Job(
-            update=update,
-            context=context,
-            src=src,
-            from_telegram=from_telegram,
-            file_id=file_id,
-            ticket_msg=ticket,
-        )
-    )
+    await _job_queue.put(Job(update=update, context=context, src=src, from_telegram=from_telegram, file_id=file_id, ticket_msg=ticket))
     _start_worker(context.application)
-
 
 # ---------- core flow ----------
 async def _process_and_upload(
