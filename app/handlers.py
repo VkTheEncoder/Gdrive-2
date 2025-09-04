@@ -164,19 +164,35 @@ async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
-async def setfolder_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def setfolder_cmd(update, context):
     if not context.args:
-        await update.message.reply_text("Usage: /setfolder <drive_folder_id> (or /setfolder none to reset)")
+        await update.message.reply_text(
+            "Usage: /setfolder <drive_folder_id or share link> (or /setfolder none to reset)"
+        )
         return
-    arg = context.args[0].strip().lower()
-    if arg in ("none", "reset", "default"):
+
+    raw = context.args[0].strip()
+    if raw.lower() in ("none", "reset", "default"):
         set_folder(update.effective_user.id, None)
         await update.message.reply_text("Folder reset. I’ll use the default 'Telegram Bot Uploads'.")
-    else:
-        set_folder(update.effective_user.id, arg)
-        await update.message.reply_text(
-            f"Folder set to: <code>{html.escape(arg)}</code>", parse_mode=ParseMode.HTML
-        )
+        return
+
+    # Accept link or raw id:
+    folder_id = raw
+    # Optional: extract id from a Drive URL
+    # e.g. https://drive.google.com/drive/folders/<ID>?...
+    m = re.search(r"/folders/([A-Za-z0-9_-]+)", raw)
+    if not m:
+        # e.g. ...open?id=<ID>
+        m = re.search(r"[?&]id=([A-Za-z0-9_-]+)", raw)
+    if m:
+        folder_id = m.group(1)
+
+    set_folder(update.effective_user.id, folder_id)
+    await update.message.reply_text(
+        f"Folder set to: <code>{html.escape(folder_id)}</code>", parse_mode=ParseMode.HTML
+    )
+
 
 
 # ---------- login/logout ----------
