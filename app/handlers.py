@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
 from telegram.error import TimedOut, RetryAfter, NetworkError, BadRequest
 from telegram import Update, Message
 from telegram.constants import ParseMode
@@ -56,6 +57,7 @@ _worker_task: Optional[asyncio.Task] = None
 _worker_busy: bool = False
 
 
+# ---------- helpers ----------
 async def safe_edit(
     msg: Message,
     text: str,
@@ -78,28 +80,40 @@ async def safe_edit(
         except (TimedOut, NetworkError):
             await asyncio.sleep(1.5 * (attempt + 1))
         except BadRequest as e:
-            # Ignore harmless "message is not modified" noise
             if "message is not modified" in str(e).lower():
                 return msg
             last_err = e
             await asyncio.sleep(0.5)
-        except Exception as e:  # anything else, try a couple more times
+        except Exception as e:
             last_err = e
             await asyncio.sleep(0.5)
-    # Fallback: try to send a new message so user still sees the result
     try:
         return await msg.chat.send_message(
             text, parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview
         )
     except Exception:
-        # Give up silently; worker will continue
         if last_err:
             raise last_err
+
 
 def extract_urls(text: Optional[str]) -> list[str]:
     if not text:
         return []
     return _URL_RE.findall(text.strip())
+
+
+async def _drain_pending(tasks: list[asyncio.Task]) -> None:
+    """Cancel/await any in-flight progress edits so they can't overwrite final cards."""
+    if not tasks:
+        return
+    for t in tasks:
+        if not t.done():
+            try:
+                t.cancel()
+            except Exception:
+                pass
+    await asyncio.gather(*tasks, return_exceptions=True)
+    tasks.clear()
 
 
 # ---------- user-facing commands ----------
@@ -129,6 +143,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "OAuth tokens are stored only to upload to <i>your</i> Drive. Use <code>/logout</code> anytime to remove them."
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await start(update, context)
@@ -169,9 +184,7 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
     if GOOGLE_OAUTH_MODE == "web":
-        # Web OAuth (needs redirect URI/domain)
         from uuid import uuid4
-
         state = uuid4().hex
         save_state(state, uid)
         flow = build_flow(state)
@@ -188,11 +201,11 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1) Open: https://www.google.com/device\n"
         f"2) Enter code: `{dc.user_code}`\n\n"
         "I’ll wait while you approve…",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode=ParseMode.MARKDOWN,
     )
 
     try:
-        tok = await poll_device_token(dc.device_code, dc.interval)  # uses server-suggested interval
+        tok = await poll_device_token(dc.device_code, dc.interval)
         creds_json = creds_from_token_response(tok)
         email = email_from_id_token(tok.get("id_token"))
         save_creds(uid, email, creds_json)
@@ -223,7 +236,6 @@ async def _queue_worker(app: Application) -> None:
         try:
             try:
                 await safe_edit(job.ticket_msg, "⏳ Starting…")
-
             except Exception:
                 pass
 
@@ -237,17 +249,15 @@ async def _queue_worker(app: Application) -> None:
             )
         except Exception as e:
             try:
-                await job.ticket_msg.edit_text(
-                    f"❌ Failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML
-                )
+                await safe_edit(job.ticket_msg, f"❌ Failed: {html.escape(str(e))}")
             except Exception:
                 pass
         finally:
             _worker_busy = False
             _job_queue.task_done()
 
+
 async def queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Global queue length + whether something is currently running
     pending = _job_queue.qsize()
     running = 1 if _worker_busy else 0
     total = pending + running
@@ -265,6 +275,7 @@ async def queue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Tip: when you add a job I reply with your position. I’ll reuse that same message for progress and results.",
     ]
     await update.message.reply_text("\n".join(msg), parse_mode=ParseMode.HTML)
+
 
 async def _enqueue_job(
     update: Update,
@@ -316,11 +327,15 @@ async def _process_and_upload(
     status_msg = existing_status_msg or await update.message.reply_text("Preparing…")
     throttle = Throttle(EDIT_THROTTLE_SECS)
 
+    # keep track of every async progress edit task
+    pending_edits: list[asyncio.Task] = []
+
     def updater(txt: str):
         if throttle.ready():
-            asyncio.create_task(
+            t = asyncio.create_task(
                 safe_edit(status_msg, txt, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
             )
+            pending_edits.append(t)
 
     # 1) Download
     try:
@@ -334,7 +349,8 @@ async def _process_and_upload(
         dl_elapsed = time.time() - dl_start
 
         size_bytes = dest.stat().st_size
-        # ✅ FIX: pass (status_msg, text)
+        # drain any straggler progress edits before the final card
+        await _drain_pending(pending_edits)
         await safe_edit(
             status_msg,
             card_done("Download complete", file_name=dest.name, size=size_bytes, dl_time=dl_elapsed),
@@ -342,7 +358,7 @@ async def _process_and_upload(
         )
     except Exception as e:
         log.exception("Download failed")
-        # ✅ FIX: pass (status_msg, text)
+        await _drain_pending(pending_edits)
         await safe_edit(status_msg, f"❌ Download failed: {html.escape(str(e))}")
         return
 
@@ -351,6 +367,7 @@ async def _process_and_upload(
         ul_start = time.time()
         service, _ = get_service_for_user(uid)
         if not service:
+            await _drain_pending(pending_edits)
             await safe_edit(status_msg, "Please /login first to connect your Google Drive.")
             return
         if not mime:
@@ -364,7 +381,8 @@ async def _process_and_upload(
 
         size_final = int(info.get("size") or size_bytes)
 
-        # ✅ FIX: use safe_edit with retries, and pass message first
+        # drain pending edits so nothing overwrites the final card
+        await _drain_pending(pending_edits)
         await safe_edit(
             status_msg,
             card_done(
@@ -379,10 +397,9 @@ async def _process_and_upload(
         )
     except Exception as e:
         log.exception("Upload failed")
-        # ✅ FIX: use safe_edit
+        await _drain_pending(pending_edits)
         await safe_edit(status_msg, f"❌ Upload failed: {html.escape(str(e))}")
         return
-
 
 
 # ---------- update handlers ----------
@@ -400,9 +417,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await _enqueue_job(
-        update, context, src="telegram", from_telegram=True, file_id=doc.file_id
-    )
+    await _enqueue_job(update, context, src="telegram", from_telegram=True, file_id=doc.file_id)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -411,6 +426,4 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No URL found. Send a direct link or upload a file.")
         return
 
-    await _enqueue_job(
-        update, context, src=urls[0], from_telegram=False, file_id=None
-    )
+    await _enqueue_job(update, context, src=urls[0], from_telegram=False, file_id=None)
