@@ -54,6 +54,7 @@ def main():
     app.add_handler(CommandHandler("me", me))
     app.add_handler(CommandHandler("setfolder", setfolder_cmd))
     app.add_handler(CommandHandler("queue", queue_cmd))
+    app.add_handler(CommandHandler("cancel", cancel_cmd))
     app.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.ANIMATION, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
