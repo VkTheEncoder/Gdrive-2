@@ -7,13 +7,55 @@ import re
 import time
 from pathlib import Path
 from typing import Callable, Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urljoin   
 from telegram import Bot
 from telegram.constants import FileDownloadOutOfRange
 from .utils import card_progress
 from .config import DOWNLOAD_DIR, DL_CHUNK
 
 _FILE_RE = re.compile(r'filename\*?=([^;]+)', re.I)
+
+_HTML_URL_RE = re.compile(r'https?://[^\s"\'<>]+', re.I)
+
+def _extract_direct_link_from_html(base_url: str, html_text: str) -> Optional[str]:
+    """
+    Try to pull a real file URL out of an HTML landing page.
+    Handles: <meta refresh>, window.location=..., <a href="..."> with file-ish links.
+    """
+    # 1) <meta http-equiv="refresh" content="0;url=...">
+    m = re.search(r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\'][^;]*;?\s*url=([^"\']+)["\']', html_text, re.I)
+    if m:
+        return urljoin(base_url, m.group(1).strip())
+
+    # 2) JS redirects: window.location / location.href / location.replace(...)
+    for pat in [
+        r'window\.location(?:\.href)?\s*=\s*[\'"]([^\'"]+)[\'"]',
+        r'location\.replace\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
+    ]:
+        m = re.search(pat, html_text, re.I)
+        if m:
+            return urljoin(base_url, m.group(1).strip())
+
+    # 3) Obvious file links in anchors (common extensions)
+    m = re.search(
+        r'<a[^>]+href=["\'](https?://[^"\']+\.(?:mp4|mkv|webm|mov|mp3|flac|wav|zip|rar|7z|pdf|srt|ass))["\']',
+        html_text, re.I
+    )
+    if m:
+        return m.group(1).strip()
+
+    # 4) Generic candidates: any https URL on the page that looks like a direct/stream file endpoint
+    candidates = []
+    for u in _HTML_URL_RE.findall(html_text):
+        u = u.strip()
+        if any(x in u for x in [
+            "googlevideo.com", "uc?export=download", "/download", "/get", "/api/dl", "/file/"
+        ]):
+            candidates.append(urljoin(base_url, u))
+    if candidates:
+        return candidates[0]
+
+    return None
 
 def sanitize_filename(name: str) -> str:
     name = unquote(name)
@@ -38,69 +80,80 @@ async def download_http(
     url: str, dest_dir: Path, status_updater: Callable[[str], None]
 ) -> tuple[Path, Optional[str], int]:
     """
-    Robust HTTP downloader that supports resume and retries when servers lie about
-    Content-Length or drop the connection mid-stream.
-    Returns: (dest_path, mime, total_bytes) where total_bytes may be 0 if unknown.
+    Robust HTTP downloader with:
+    - HTML landing page handling (extracts real file URL)
+    - Resume via Range when connection drops or server lies about Content-Length
+    Returns: (dest_path, mime, total_bytes)
     """
-    import aiohttp
-    from aiohttp import ClientPayloadError, ClientConnectorError, ContentTypeError
-    import asyncio
-    import time
-    from .utils import card_progress
-
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    # Decide filename first (HEAD if possible)
-    async with aiohttp.ClientSession() as sess:
-        mime = None
-        total_declared = 0
-        name = None
+    # --- Follow up to 3 HTML landing pages to a direct file URL ---
+    max_html_hops = 3
+    cur_url = url
+    mime_hint = None
+    total_declared = 0
+    name_hint = None
 
-        # Try HEAD to learn size/name quickly (ignore errors)
-        try:
-            async with sess.head(url, allow_redirects=True) as hr:
-                if hr.status // 100 == 2:
-                    total_declared = int(hr.headers.get("Content-Length") or 0)
-                    name = pick_name_from_headers(str(hr.url), hr.headers)
-                    mime = hr.headers.get("Content-Type")
-        except Exception:
-            pass  # Some servers disallow HEAD; we’ll figure it out from GET
+    async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as sess:
+        for _ in range(max_html_hops + 1):
+            # HEAD first (optional hint)
+            try:
+                async with sess.head(cur_url, allow_redirects=True) as hr:
+                    if hr.status // 100 == 2:
+                        mime_hint = mime_hint or hr.headers.get("Content-Type")
+                        total_declared = int(hr.headers.get("Content-Length") or 0)
+                        if not name_hint:
+                            name_hint = pick_name_from_headers(str(hr.url), hr.headers)
+            except Exception:
+                pass
 
-    # Fallback to name from URL if HEAD failed
-    if not name:
-        name = pick_name_from_headers(url, {})
+            # GET once to see if it's HTML or a file
+            async with sess.get(cur_url, allow_redirects=True) as r:
+                ct = (r.headers.get("Content-Type") or "").lower()
+                if ct.startswith("text/html") and (r.status // 100 == 2):
+                    # This is an HTML page. Read it and try to extract the real file URL.
+                    txt = await r.text(errors="ignore")
+                    nxt = _extract_direct_link_from_html(str(r.url), txt)
+                    if nxt and nxt != cur_url:
+                        cur_url = nxt
+                        continue  # try again (next hop)
+                    # No direct link found; bail out with a friendly message.
+                    raise RuntimeError(
+                        "This URL opens a web page, not a direct file. "
+                        "Open it in a browser and copy the final download link (it should end with the file)."
+                    )
+                else:
+                    # We got a file response (or at least not HTML) — proceed to real download with this URL.
+                    # Let the streaming/resume logic below handle it; we won't reuse this response.
+                    break
 
+    # Decide filename
+    name = name_hint or pick_name_from_headers(cur_url, {})
     dest = dest_dir / name
-    dest_tmp = dest.with_suffix(dest.suffix + ".part")
+    part = dest.with_suffix(dest.suffix + ".part")
 
-    # State for progress
+    # Progress state
     start_time = time.time()
     last_t = start_time
     last_done = 0
-    done = 0
-    total = total_declared  # may be updated from Content-Range on first 206
-
-    # If a .part file exists from a previous attempt, continue from there
-    if dest_tmp.exists():
-        done = dest_tmp.stat().st_size
+    done = part.stat().st_size if part.exists() else 0
+    total = total_declared
 
     max_retries = 5
     retries_left = max_retries
 
     async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as sess:
-        # We always (re)open the file in append mode
-        with open(dest_tmp, "ab") as f:
+        with open(part, "ab") as f:
             while True:
                 headers = {}
                 if done > 0:
                     headers["Range"] = f"bytes={done}-"
 
                 try:
-                    async with sess.get(url, allow_redirects=True, headers=headers, timeout=aiohttp.ClientTimeout(total=None)) as r:
+                    async with sess.get(cur_url, allow_redirects=True, headers=headers, timeout=aiohttp.ClientTimeout(total=None)) as r:
                         r.raise_for_status()
 
-                        # Handle sizes
-                        # If server honors Range, status is 206 and Content-Range gives us total
+                        # Determine total size
                         cr = r.headers.get("Content-Range")
                         if cr and "bytes" in cr and "/" in cr:
                             try:
@@ -109,24 +162,20 @@ async def download_http(
                                 pass
                         if total == 0:
                             try:
-                                # For 200 (no range) we can still have Content-Length
                                 total = int(r.headers.get("Content-Length") or 0)
                             except Exception:
                                 total = 0
 
-                        # If server ignored our Range and sent 200, but we had partial data,
-                        # restart from scratch (truncate)
+                        # If server ignored Range and sent full 200, restart clean
                         if done > 0 and r.status == 200:
-                            f.seek(0)
-                            f.truncate(0)
+                            f.seek(0); f.truncate(0)
                             done = 0
                             last_done = 0
                             start_time = last_t = time.time()
 
-                        if not mime:
-                            mime = r.headers.get("Content-Type")
+                        if not mime_hint:
+                            mime_hint = r.headers.get("Content-Type")
 
-                        # Stream
                         async for chunk in r.content.iter_chunked(DL_CHUNK):
                             f.write(chunk)
                             done += len(chunk)
@@ -140,28 +189,22 @@ async def download_http(
                                 status_updater(card_progress("Downloading File", done, total, speed, elapsed, eta))
                                 last_t, last_done = now, done
 
-                        # Successfully reached EOF of this request
-                        # If we know total and matched it, we’re done;
-                        # if total unknown or we downloaded everything available, also done.
+                        # Finished this response
                         if total == 0 or done >= total:
                             break
 
-                        # If we’re here with done < total, the server closed early.
-                        # Loop will retry with Range to get the rest.
+                        # Server closed early — retry and fetch remainder
                         retries_left = max_retries
 
-                except (aiohttp.ContentLengthError, ClientPayloadError, ClientConnectorError, asyncio.TimeoutError, ConnectionResetError) as e:
+                except (aiohttp.ContentLengthError, aiohttp.ClientPayloadError, aiohttp.ClientConnectorError, asyncio.TimeoutError, ConnectionResetError) as e:
                     if retries_left > 0:
                         retries_left -= 1
-                        # brief backoff
                         await asyncio.sleep(1.0)
                         continue
-                    # out of retries
                     raise
 
-    # Finalize file
-    os.replace(dest_tmp, dest)
-    return dest, mime, total
+    os.replace(part, dest)
+    return dest, mime_hint, total
 
 
 async def download_telegram_file(bot: Bot, file_id: str, dest_dir: Path, status_updater: Callable[[str], None]) -> tuple[Path, Optional[str], int]:
