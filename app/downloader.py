@@ -13,24 +13,30 @@ from telegram.constants import FileDownloadOutOfRange
 from .utils import card_progress
 from .config import DOWNLOAD_DIR, DL_CHUNK
 import html as _html  # for unescaping &amp; etc
+from aiohttp import ClientPayloadError, ClientConnectorError, ClientResponseError
+
 _FILE_RE = re.compile(r'filename\*?=([^;]+)', re.I)
 
 _HTML_URL_RE = re.compile(r'https?://[^\s"\'<>]+', re.I)
+
+def _sanitize_candidate(u: str) -> str:
+    # trim junk some pages append outside quotes, e.g. css url(...) ending ')'
+    return u.strip().rstrip(')]>;,.')
 
 def _extract_direct_link_from_html(base_url: str, html_text: str) -> Optional[str]:
     """
     Pull a real file/redirect URL out of an HTML landing page.
     Handles:
-      - <meta http-equiv=refresh content="0; url=..."> (any attribute order, with/without quotes)
-      - JS redirects: window.location[.href]=..., location.replace(...)
-      - setTimeout(... window.location = '...')
-      - Obvious anchors (href with common file extensions or 'download' text)
-      - Generic candidates that look like direct/stream endpoints
+      - <meta http-equiv=refresh ... content="...;url=...">
+      - JS redirects: window.location[.href]=..., location.replace(...), setTimeout(...)
+      - CSS/JS url('...') constructs
+      - <a href="..."> with download-ish text or file extensions
+      - Generic candidates that look like direct endpoints
     """
-    def _u(s: str) -> str:
+    def U(s: str) -> str:
         return _html.unescape(s.strip())
 
-    # 1) META REFRESH (attribute order/quotes vary on Blogspot)
+    # 1) META REFRESH (attribute order varies on Blogspot)
     meta_pat = re.compile(
         r'<meta[^>]*?(?:http-equiv\s*=\s*["\']?refresh["\']?[^>]*?content\s*=\s*["\']([^"\']+)["\']'
         r'|content\s*=\s*["\']([^"\']+)["\'][^>]*?http-equiv\s*=\s*["\']?refresh["\']?)[^>]*?>',
@@ -38,10 +44,10 @@ def _extract_direct_link_from_html(base_url: str, html_text: str) -> Optional[st
     )
     m = meta_pat.search(html_text)
     if m:
-        content = m.group(1) or m.group(2) or ""
+        content = (m.group(1) or m.group(2) or "")
         m2 = re.search(r'url\s*=\s*([^;,\s]+)', content, re.I)
         if m2:
-            return urljoin(base_url, _u(m2.group(1)))
+            return urljoin(base_url, _sanitize_candidate(U(m2.group(1))))
 
     # 2) JS redirects
     for pat in [
@@ -51,24 +57,34 @@ def _extract_direct_link_from_html(base_url: str, html_text: str) -> Optional[st
     ]:
         m = re.search(pat, html_text, re.I)
         if m:
-            return urljoin(base_url, _u(m.group(1)))
+            return urljoin(base_url, _sanitize_candidate(U(m.group(1))))
 
-    # 3) Anchors that look like "download"
+    # 3) CSS url(...) patterns (avoid grabbing the trailing ')')
+    css_pat = re.compile(r'url\(\s*([\'"]?)(https?://[^)\'"]+)\1\s*\)', re.I)
+    m = css_pat.search(html_text)
+    if m:
+        return urljoin(base_url, _sanitize_candidate(U(m.group(2))))
+
+    # 4) <a href="..."> anchors — prefer obvious downloads
     a_pat = re.compile(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
     for href, text in a_pat.findall(html_text):
         txt = re.sub(r'\s+', ' ', text).strip().lower()
+        href_u = _sanitize_candidate(U(href))
         if any(w in txt for w in ["download", "click here", "continue", "get file"]):
-            return urljoin(base_url, _u(href))
-        # obvious file extensions
-        if re.search(r'\.(mp4|mkv|webm|mov|mp3|flac|wav|zip|rar|7z|pdf|srt|ass)(\?|#|$)', href, re.I):
-            return urljoin(base_url, _u(href))
+            return urljoin(base_url, href_u)
+        if re.search(r'\.(mp4|mkv|webm|mov|mp3|flac|wav|zip|rar|7z|pdf|srt|ass)(\?|#|$)', href_u, re.I):
+            return urljoin(base_url, href_u)
 
-    # 4) Generic candidates visible on page
+    # 5) Generic candidates seen on page (avoid random googleusercontent *images*)
     candidates = []
     for u in _HTML_URL_RE.findall(html_text):
-        u = _u(u)
+        u = _sanitize_candidate(U(u))
+        # skip obvious theme/image assets
+        if re.search(r'(blogger|themes)\.googleusercontent\.com', u):
+            continue
+        # prefer endpoints that smell like file downloads
         if any(x in u for x in [
-            "googlevideo.com", "usercontent", "uc?export=download",
+            "googlevideo.com", "uc?export=download",
             "/download", "/get", "/api/dl", "/file/", "/dl?", "/d/"
         ]):
             candidates.append(urljoin(base_url, u))
@@ -227,7 +243,7 @@ async def download_http(
                         # Server closed early — retry and fetch remainder
                         retries_left = max_retries
 
-                except (aiohttp.ContentLengthError, aiohttp.ClientPayloadError, aiohttp.ClientConnectorError, asyncio.TimeoutError, ConnectionResetError) as e:
+                except (ClientPayloadError, ClientConnectorError, asyncio.TimeoutError, ConnectionResetError) as e:
                     if retries_left > 0:
                         retries_left -= 1
                         await asyncio.sleep(1.0)
