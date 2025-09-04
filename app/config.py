@@ -10,7 +10,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "http://localhost:8080/oauth/callback")
-DRIVE_SHARE_PUBLIC = os.getenv("DRIVE_SHARE_PUBLIC", "false").lower() == "true"
+
 # Optional
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")  # public URL where FastAPI is served
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data")).resolve()
