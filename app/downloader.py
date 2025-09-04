@@ -12,44 +12,64 @@ from telegram import Bot
 from telegram.constants import FileDownloadOutOfRange
 from .utils import card_progress
 from .config import DOWNLOAD_DIR, DL_CHUNK
-
+import html as _html  # for unescaping &amp; etc
 _FILE_RE = re.compile(r'filename\*?=([^;]+)', re.I)
 
 _HTML_URL_RE = re.compile(r'https?://[^\s"\'<>]+', re.I)
 
 def _extract_direct_link_from_html(base_url: str, html_text: str) -> Optional[str]:
     """
-    Try to pull a real file URL out of an HTML landing page.
-    Handles: <meta refresh>, window.location=..., <a href="..."> with file-ish links.
+    Pull a real file/redirect URL out of an HTML landing page.
+    Handles:
+      - <meta http-equiv=refresh content="0; url=..."> (any attribute order, with/without quotes)
+      - JS redirects: window.location[.href]=..., location.replace(...)
+      - setTimeout(... window.location = '...')
+      - Obvious anchors (href with common file extensions or 'download' text)
+      - Generic candidates that look like direct/stream endpoints
     """
-    # 1) <meta http-equiv="refresh" content="0;url=...">
-    m = re.search(r'<meta[^>]+http-equiv=["\']refresh["\'][^>]+content=["\'][^;]*;?\s*url=([^"\']+)["\']', html_text, re.I)
-    if m:
-        return urljoin(base_url, m.group(1).strip())
+    def _u(s: str) -> str:
+        return _html.unescape(s.strip())
 
-    # 2) JS redirects: window.location / location.href / location.replace(...)
+    # 1) META REFRESH (attribute order/quotes vary on Blogspot)
+    meta_pat = re.compile(
+        r'<meta[^>]*?(?:http-equiv\s*=\s*["\']?refresh["\']?[^>]*?content\s*=\s*["\']([^"\']+)["\']'
+        r'|content\s*=\s*["\']([^"\']+)["\'][^>]*?http-equiv\s*=\s*["\']?refresh["\']?)[^>]*?>',
+        re.I,
+    )
+    m = meta_pat.search(html_text)
+    if m:
+        content = m.group(1) or m.group(2) or ""
+        m2 = re.search(r'url\s*=\s*([^;,\s]+)', content, re.I)
+        if m2:
+            return urljoin(base_url, _u(m2.group(1)))
+
+    # 2) JS redirects
     for pat in [
         r'window\.location(?:\.href)?\s*=\s*[\'"]([^\'"]+)[\'"]',
         r'location\.replace\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
+        r'setTimeout\([^)]*?window\.location(?:\.href)?\s*=\s*[\'"]([^\'"]+)[\'"]',
     ]:
         m = re.search(pat, html_text, re.I)
         if m:
-            return urljoin(base_url, m.group(1).strip())
+            return urljoin(base_url, _u(m.group(1)))
 
-    # 3) Obvious file links in anchors (common extensions)
-    m = re.search(
-        r'<a[^>]+href=["\'](https?://[^"\']+\.(?:mp4|mkv|webm|mov|mp3|flac|wav|zip|rar|7z|pdf|srt|ass))["\']',
-        html_text, re.I
-    )
-    if m:
-        return m.group(1).strip()
+    # 3) Anchors that look like "download"
+    a_pat = re.compile(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
+    for href, text in a_pat.findall(html_text):
+        txt = re.sub(r'\s+', ' ', text).strip().lower()
+        if any(w in txt for w in ["download", "click here", "continue", "get file"]):
+            return urljoin(base_url, _u(href))
+        # obvious file extensions
+        if re.search(r'\.(mp4|mkv|webm|mov|mp3|flac|wav|zip|rar|7z|pdf|srt|ass)(\?|#|$)', href, re.I):
+            return urljoin(base_url, _u(href))
 
-    # 4) Generic candidates: any https URL on the page that looks like a direct/stream file endpoint
+    # 4) Generic candidates visible on page
     candidates = []
     for u in _HTML_URL_RE.findall(html_text):
-        u = u.strip()
+        u = _u(u)
         if any(x in u for x in [
-            "googlevideo.com", "uc?export=download", "/download", "/get", "/api/dl", "/file/"
+            "googlevideo.com", "usercontent", "uc?export=download",
+            "/download", "/get", "/api/dl", "/file/", "/dl?", "/d/"
         ]):
             candidates.append(urljoin(base_url, u))
     if candidates:
@@ -88,7 +108,7 @@ async def download_http(
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Follow up to 3 HTML landing pages to a direct file URL ---
-    max_html_hops = 3
+    max_html_hops = 5
     cur_url = url
     mime_hint = None
     total_declared = 0
@@ -108,7 +128,11 @@ async def download_http(
                 pass
 
             # GET once to see if it's HTML or a file
-            async with sess.get(cur_url, allow_redirects=True) as r:
+            aasync with sess.get(
+                cur_url,
+                allow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0", "Referer": base_referer},
+            ) as r:
                 ct = (r.headers.get("Content-Type") or "").lower()
                 if ct.startswith("text/html") and (r.status // 100 == 2):
                     # This is an HTML page. Read it and try to extract the real file URL.
@@ -145,12 +169,18 @@ async def download_http(
     async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0"}) as sess:
         with open(part, "ab") as f:
             while True:
-                headers = {}
+                base_headers = {"User-Agent": "Mozilla/5.0", "Referer": base_referer}
+                headers = dict(base_headers)
                 if done > 0:
                     headers["Range"] = f"bytes={done}-"
 
                 try:
-                    async with sess.get(cur_url, allow_redirects=True, headers=headers, timeout=aiohttp.ClientTimeout(total=None)) as r:
+                    async with sess.get(
+                        cur_url,
+                        allow_redirects=True,
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=None),
+                    ) as r:
                         r.raise_for_status()
 
                         # Determine total size
