@@ -15,7 +15,7 @@ from .handlers import start, help_cmd, login, logout, me, setfolder_cmd, handle_
 
 logging.basicConfig(
     format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
-    level=logging.DEBUG,   # was INFO
+    level=logging.INFO,   # was INFO
 )
 log = logging.getLogger("gdrive_bot")
 
