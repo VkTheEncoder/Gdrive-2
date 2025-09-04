@@ -144,21 +144,34 @@ def ensure_default_folder(service, user_id: int) -> str:
     set_folder(user_id, folder_id)
     return folder_id
 
-def upload_with_progress(
-    service, user_id: int, file_path: str, file_name: str, mime: Optional[str],
-    status_updater: Callable[[str], None]
-) -> str:
-    folder_id = ensure_default_folder(service, user_id)
-    media = MediaFileUpload(file_path, mimetype=mime, chunksize=CHUNK_SIZE, resumable=True)
-    body = {"name": file_name, "parents": [folder_id]}
-    req = service.files().create(body=body, media_body=media, fields="id, webViewLink, webContentLink")
+
+def upload_with_progress(service, user_id: int, file_path: str, file_name: str, mime: str | None, status_updater):
+    """
+    Uploads to Drive with resumable chunks and progress updates.
+    Returns: (link, info_dict) where link is webContentLink or webViewLink.
+    """
+    # Use parent folder if the user set one
+    folder = get_folder(user_id)
+    meta = {"name": file_name}
+    if folder:
+        meta["parents"] = [folder]
+
+    # 5MB chunks = smooth progress, good throughput
+    media = MediaFileUpload(file_path, mimetype=mime, resumable=True, chunksize=5 * 1024 * 1024)
+
+    # Ask Drive to return links & size right away
+    req = service.files().create(
+        body=meta,
+        media_body=media,
+        fields="id,name,size,webViewLink,webContentLink",
+    )
 
     start = time.time()
-    last_bytes = 0
     last_t = start
+    last_bytes = 0
     uploaded = 0
     total = media.size() or 0
-    
+
     resp = None
     while resp is None:
         status, resp = req.next_chunk()
@@ -174,6 +187,12 @@ def upload_with_progress(
             elapsed = now - start
             status_updater(card_progress("Uploading File", uploaded, total, speed, elapsed, eta))
 
-    file_id = resp["id"]
-    link = resp.get("webViewLink") or f"https://drive.google.com/file/d/{file_id}/view"
-    return link
+    # Sometimes create(...) doesn’t include links/size; fetch again if needed
+    if not resp.get("webViewLink") or not resp.get("webContentLink") or not resp.get("size"):
+        resp = service.files().get(
+            fileId=resp["id"],
+            fields="id,name,size,webViewLink,webContentLink",
+        ).execute()
+
+    link = resp.get("webContentLink") or resp.get("webViewLink")
+    return link, resp
