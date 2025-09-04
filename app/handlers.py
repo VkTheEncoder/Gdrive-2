@@ -187,7 +187,8 @@ async def login(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔐 Connect Google Drive\n\n"
         "1) Open: https://www.google.com/device\n"
         f"2) Enter code: `{dc.user_code}`\n\n"
-        "I’ll wait while you approve…"
+        "I’ll wait while you approve…",
+        parse_mode=ParseMode.MARKDOWN
     )
 
     try:
