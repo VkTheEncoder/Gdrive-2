@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-
+from telegram.error import TimedOut, RetryAfter, NetworkError, BadRequest
 from telegram import Update, Message
 from telegram.constants import ParseMode
 from telegram.ext import Application, ContextTypes
@@ -55,6 +55,46 @@ _job_queue: asyncio.Queue[Job] = asyncio.Queue()
 _worker_task: Optional[asyncio.Task] = None
 _worker_busy: bool = False
 
+
+async def safe_edit(
+    msg: Message,
+    text: str,
+    *,
+    parse_mode: ParseMode = ParseMode.HTML,
+    disable_web_page_preview: bool = True,
+    max_tries: int = 4,
+):
+    """Edit a message with retries on Telegram timeouts/rate limits."""
+    last_err = None
+    for attempt in range(max_tries):
+        try:
+            return await msg.edit_text(
+                text,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview,
+            )
+        except RetryAfter as e:
+            await asyncio.sleep(float(getattr(e, "retry_after", 1)) + 0.5)
+        except (TimedOut, NetworkError):
+            await asyncio.sleep(1.5 * (attempt + 1))
+        except BadRequest as e:
+            # Ignore harmless "message is not modified" noise
+            if "message is not modified" in str(e).lower():
+                return msg
+            last_err = e
+            await asyncio.sleep(0.5)
+        except Exception as e:  # anything else, try a couple more times
+            last_err = e
+            await asyncio.sleep(0.5)
+    # Fallback: try to send a new message so user still sees the result
+    try:
+        return await msg.chat.send_message(
+            text, parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview
+        )
+    except Exception:
+        # Give up silently; worker will continue
+        if last_err:
+            raise last_err
 
 def extract_urls(text: Optional[str]) -> list[str]:
     if not text:
@@ -182,7 +222,8 @@ async def _queue_worker(app: Application) -> None:
         _worker_busy = True
         try:
             try:
-                await job.ticket_msg.edit_text("⏳ Starting…")
+                await safe_edit(job.ticket_msg, "⏳ Starting…")
+
             except Exception:
                 pass
 
@@ -259,11 +300,8 @@ async def _process_and_upload(
     def updater(txt: str):
         if throttle.ready():
             asyncio.create_task(
-                status_msg.edit_text(
-                    txt, parse_mode=ParseMode.HTML, disable_web_page_preview=True
-                )
+                safe_edit(status_msg, txt, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
             )
-
     # 1) Download
     try:
         dl_start = time.time()
@@ -276,7 +314,7 @@ async def _process_and_upload(
         dl_elapsed = time.time() - dl_start
 
         size_bytes = dest.stat().st_size
-        await status_msg.edit_text(
+        await safe_edit(
             card_done(
                 "Download complete",
                 file_name=dest.name,
@@ -288,7 +326,7 @@ async def _process_and_upload(
         )
     except Exception as e:
         log.exception("Download failed")
-        await status_msg.edit_text(
+        await safe_edit(
             f"❌ Download failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML
         )
         return
