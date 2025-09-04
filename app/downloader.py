@@ -128,7 +128,7 @@ async def download_http(
                 pass
 
             # GET once to see if it's HTML or a file
-            aasync with sess.get(
+            async with sess.get(
                 cur_url,
                 allow_redirects=True,
                 headers={"User-Agent": "Mozilla/5.0", "Referer": base_referer},
