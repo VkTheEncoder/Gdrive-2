@@ -145,32 +145,41 @@ async def _process_and_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         await status_msg.edit_text(f"❌ Download failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
         return
 
-    # 2) Upload
-    try:
-        ul_start = time.time()
-        service, _ = get_service_for_user(uid)
-        if not service:
-            await status_msg.edit_text("Please /login first to connect your Google Drive.")
-            return
-        if not mime:
-            mime, _ = mimetypes.guess_type(dest.name)
-
-        # immediately switch the message to an initial uploading card (0%); the loop inside upload will keep updating
-        updater(card_progress("Uploading File", 0, size_bytes, 0.0, 0.0, -1))
-
-        link = upload_with_progress(service, uid, str(dest), dest.name, mime, updater)
-        ul_elapsed = time.time() - ul_start
-
-        # 3) Final summary
-        await status_msg.edit_text(
-            card_done("Upload complete", file_name=dest.name, size=size_bytes, dl_time=dl_elapsed, ul_time=ul_elapsed, link=link),
-            parse_mode=ParseMode.HTML, disable_web_page_preview=False
-        )
-    except Exception as e:
-        log.exception("Upload failed")
-        await status_msg.edit_text(f"❌ Upload failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
+# 2) Upload
+try:
+    ul_start = time.time()
+    service, _ = get_service_for_user(uid)
+    if not service:
+        await status_msg.edit_text("Please /login first to connect your Google Drive.")
         return
+    if not mime:
+        mime, _ = mimetypes.guess_type(dest.name)
 
+    # show an initial uploading card immediately
+    updater(card_progress("Uploading File", 0, size_bytes, 0.0, 0.0, -1))
+
+    link, info = upload_with_progress(service, uid, str(dest), dest.name, mime, updater)
+    ul_elapsed = time.time() - ul_start
+
+    # prefer Drive-reported size if present
+    size_final = int(info.get("size") or size_bytes)
+
+    await status_msg.edit_text(
+        card_done(
+            "Upload complete",
+            file_name=dest.name,
+            size=size_final,
+            dl_time=dl_elapsed,
+            ul_time=ul_elapsed,
+            link=link,
+        ),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=False,
+    )
+except Exception as e:
+    log.exception("Upload failed")
+    await status_msg.edit_text(f"❌ Upload failed: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
+    return
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document or update.message.video or update.message.animation
     if not doc:
