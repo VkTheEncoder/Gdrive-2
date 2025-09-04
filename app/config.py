@@ -10,7 +10,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 OAUTH_REDIRECT_URI = os.getenv("OAUTH_REDIRECT_URI", "http://localhost:8080/oauth/callback")
-EDIT_THROTTLE_SECS = os.getenv("EDIT_THROTTLE_SECS", "")
+EDIT_THROTTLE_SECS = float(os.getenv("EDIT_THROTTLE_SECS", "1.0"))
 # Optional
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")  # public URL where FastAPI is served
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data")).resolve()
