@@ -106,7 +106,8 @@ async def download_http(
     Returns: (dest_path, mime, total_bytes)
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
-
+    # Use the original URL as Referer for all hops/requests
+    base_referer = url
     # --- Follow up to 3 HTML landing pages to a direct file URL ---
     max_html_hops = 5
     cur_url = url
@@ -239,6 +240,7 @@ async def download_http(
 
 async def download_telegram_file(bot: Bot, file_id: str, dest_dir: Path, status_updater: Callable[[str], None]) -> tuple[Path, Optional[str], int]:
     dest_dir.mkdir(parents=True, exist_ok=True)
+    
     tg_file = await bot.get_file(file_id)
     file_url = f"https://api.telegram.org/file/bot{bot.token}/{tg_file.file_path}"
     base = os.path.basename(tg_file.file_path)
